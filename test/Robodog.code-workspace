@@ -1,0 +1,29 @@
+{
+	"folders": [
+		{
+			"path": "../../../../GitHub/Robodog"
+		},
+		{
+			"name": "i2c master for testing",
+			"path": "../../../../GitHub/Robodog/I2c Master for testing/i2c master for testing"
+		},
+		{
+			"name": "Robodog with rotary encoder",
+			"path": "../../Robodog with rotary encoder"
+		},
+		{
+			"name": "daisyboard",
+			"path": "../../daisyboard"
+		},
+		{
+			"name": "Daisyboard testing",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"CodeGPT.apiKey": "CodeGPT Plus Beta",
+		"files.associations": {
+			"string_view": "cpp"
+		}
+	}
+}

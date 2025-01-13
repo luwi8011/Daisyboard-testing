@@ -17,7 +17,9 @@
 #define SCL_PIN 10
 
 // CANbus/TWAI address
-#define DEVICE_TWAI_ID 0x125 // Unique TWAI address for this board
+//#define DEVICE_TWAI_ID 0x123 // Ankle board address
+//#define DEVICE_TWAI_ID 0x125 // Knee board address
+#define DEVICE_TWAI_ID 0x127 // Hip board address
 
 float kp = 10.0; // Default proportional gain
 float ki = 0.5;  // Default integral gain
@@ -28,6 +30,7 @@ float kd = 0.1;  // Default derivative gain
 #define EEPROM_KD_ADDR 16          // EEPROM address for kd
 #define EEPROM_MARKER_ADDR 20      // EEPROM address for marker
 #define EEPROM_ZERO_MARKER_ADDR 21 // EEPROM address for zero marker
+#define EEPROM_DIRECTION_ADDR 24   // EEPROM address for direction
 
 float targetAngle = 0.0;
 float currentAngle = 0.0;
@@ -38,6 +41,7 @@ int zeroOffset = 0; // Offset determined during manual zeroing
 float deadband = 0.0;
 int endpointSafezone = 5;
 float pidOutput;
+float motorCurrent = 0;
 
 // PID variables
 double setpoint, input, output;
@@ -49,6 +53,8 @@ PID myPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
 
 // System state
 bool isZeroed = false; // Flag to track if the system has been zeroed
+int direction = 1;     // Direction determined during zeroing
+bool flipOutput = false; // Flag to track if the PID output should be flipped
 
 // LEDC channel and timer definitions
 #define LEDC_CHANNEL_0 0
@@ -63,7 +69,7 @@ void printLiveData(float currentAngle, float targetAngle, float pidOutput, float
 void saveToEEPROM();
 void loadFromEEPROM();
 void performZeroing();
-void sendLiveDataTWAI(int target, int current, const char *direction, int pwm);
+void sendLiveDataTWAI(float currentAngle, int motorCurrent, int pwm);
 void receiveTWAIInput();
 
 void setup()
@@ -184,8 +190,10 @@ float readAngle()
     // Convert raw 12-bit angle to degrees
     float angleInDegrees = (rawAngle * 360.0) / 4096.0;
 
-    // Apply zero offset
-    float adjustedAngle = angleInDegrees - zeroOffset;
+    // Apply zero offset and direction
+    float adjustedAngle = (angleInDegrees - zeroOffset) * direction;
+
+    
 
     // Handle wrap-around
     float diff = adjustedAngle - lastAdjustedAngle;
@@ -202,16 +210,23 @@ float readAngle()
     totalAngle += diff;
     lastAdjustedAngle = adjustedAngle;
 
+    
     // Debugging info
     // Serial.print("Raw Angle: "); Serial.print(rawAngle);
     // Serial.print(" | Adjusted Angle: "); Serial.print(adjustedAngle);
     // Serial.print(" | Total Angle: "); Serial.println(totalAngle);
-
+    
+    totalAngle = abs(totalAngle); // Ensure total angle is always positive
     return totalAngle;
 }
 
 void controlMotor(float pidOutput)
 {
+    if (flipOutput)
+    {
+        pidOutput = -pidOutput; // Flip the PID output if the flag is set
+    }
+
     int pwmValue = (int)abs(pidOutput); // Get the absolute value of the PID output for PWM
 
     if (pidOutput == 0)
@@ -247,6 +262,12 @@ void receiveSerialInput()
         if (input.equalsIgnoreCase("ZERO"))
         {
             performZeroing();
+        }
+        else if (input.equalsIgnoreCase("FLIP"))
+        {
+            flipOutput = !flipOutput; // Toggle the flip flag
+            Serial.print("PID output flipped: ");
+            Serial.println(flipOutput ? "ON" : "OFF");
         }
         else if (input.startsWith("P="))
         {
@@ -286,7 +307,7 @@ void receiveSerialInput()
         }
         else
         {
-            Serial.println("Invalid input. Use 'ZERO', a number (0-360) for target angle, or 'P=value', 'I=value', 'D=value' to set PID parameters.");
+            Serial.println("Invalid input. Use 'ZERO', 'FLIP', a number (0-360) for target angle, or 'P=value', 'I=value', 'D=value' to set PID parameters.");
         }
     }
 }
@@ -296,9 +317,9 @@ void performZeroing()
     Serial.println("Zeroing process started...");
     zeroOffset = 0;
     float initialAngle = readAngle();
-    int direction = initialAngle > 180 ? -1 : 1; // Determine direction to decrease the angle
+    direction = initialAngle > 180 ? -1 : 1; // Determine direction to decrease the angle
 
-    // Drive motor at 25% PWM for 5 seconds to find zero
+    // Drive motor at 25% PWM for 2 seconds to find zero
     int pwmValue = 200; // 25% of 255
     if (direction == 1)
     {
@@ -312,7 +333,7 @@ void performZeroing()
         digitalWrite(MOTOR_INB_PIN, LOW);
         ledcWrite(LEDC_CHANNEL_0, pwmValue);
     }
-    delay(2000); // Drive motor for 5 seconds
+    delay(2000); // Drive motor for 2 seconds
 
     // Set zero offset
     zeroOffset = readAngle();
@@ -324,6 +345,8 @@ void performZeroing()
     // Find endpoint by driving in the opposite direction
     Serial.println("Finding endpoint...");
     direction *= -1;
+    float maxAngle = zeroOffset;
+    unsigned long startTime = millis();
     if (direction == 1)
     {
         digitalWrite(MOTOR_INA_PIN, LOW);
@@ -336,14 +359,26 @@ void performZeroing()
         digitalWrite(MOTOR_INB_PIN, LOW);
         ledcWrite(LEDC_CHANNEL_0, pwmValue);
     }
-    delay(2000); // Drive motor for 5 seconds
+
+    while (millis() - startTime < 2000)
+    {
+        float currentAngle = readAngle();
+        if (currentAngle > maxAngle)
+        {
+            maxAngle = currentAngle;
+        }
+    }
 
     // Record endpoint
-    endPoint = readAngle();
+    endPoint = maxAngle;
 
     digitalWrite(MOTOR_INA_PIN, LOW);
     digitalWrite(MOTOR_INB_PIN, LOW);
     ledcWrite(LEDC_CHANNEL_0, 0);
+
+    // Save direction to EEPROM
+    EEPROM.put(EEPROM_DIRECTION_ADDR, direction);
+    EEPROM.commit();
 
     // Save to EEPROM
     saveToEEPROM();
@@ -359,8 +394,8 @@ void printLiveData(float currentAngle, float targetAngle, float pidOutput, float
 
     Serial.print("Target: ");
     Serial.print(targetAngle);
-    Serial.print(" | Current: ");
-    Serial.print(currentAngle);
+    Serial.print(" | Current Angle: ");
+    Serial.print(abs(totalAngle)); // Ensure the current angle is displayed as positive
     Serial.print(" | PID Output: ");
     Serial.print(pidOutput);
     Serial.print(" | Direction: ");
@@ -395,6 +430,7 @@ void saveToEEPROM()
     EEPROM.put(EEPROM_KP_ADDR, kp);
     EEPROM.put(EEPROM_KI_ADDR, ki);
     EEPROM.put(EEPROM_KD_ADDR, kd);
+    EEPROM.put(EEPROM_DIRECTION_ADDR, direction);
 
     // Set EEPROM markers to indicate that values have been initialized
     byte marker = 1;
@@ -444,32 +480,33 @@ void loadFromEEPROM()
         Serial.println("System is not zeroed. Please perform zeroing.");
     }
 
+    // Load direction from EEPROM
+    EEPROM.get(EEPROM_DIRECTION_ADDR, direction);
+
     // Initialize PID with loaded values
     myPID.SetTunings(kp, ki, kd);
 }
 
-void sendLiveDataTWAI(int target, int current, const char *direction, int pwm)
+void sendLiveDataTWAI(float currentAngle, int motorCurrent, int pwm)
 {
     twai_message_t message;
     message.identifier = DEVICE_TWAI_ID;
     message.extd = 0;             // Standard frame
     message.rtr = 0;              // Data frame
-    message.data_length_code = 8; // Up to 8 bytes
+    message.data_length_code = 6; // Up to 6 bytes
 
     // Pack data into the message payload
-    message.data[0] = (uint8_t)(target & 0xFF);
-    message.data[1] = (uint8_t)((target >> 8) & 0xFF);
-    message.data[2] = (uint8_t)(current & 0xFF);
-    message.data[3] = (uint8_t)((current >> 8) & 0xFF);
-    message.data[4] = (strcmp(direction, "Forward") == 0) ? 1 : (strcmp(direction, "Reverse") == 0) ? 2
-                                                                                                    : 0;
-    message.data[5] = (uint8_t)(pwm & 0xFF);
-    message.data[6] = (uint8_t)((pwm >> 8) & 0xFF);
-    message.data[7] = 0; // Reserved for future use or additional flags
+    int angle = (int)currentAngle;
+    message.data[0] = (uint8_t)(angle & 0xFF);
+    message.data[1] = (uint8_t)((angle >> 8) & 0xFF);
+    message.data[2] = (uint8_t)(motorCurrent & 0xFF);  // Motor current instead of direction
+    message.data[3] = (uint8_t)(pwm & 0xFF);
+    message.data[4] = (uint8_t)((pwm >> 8) & 0xFF);
+    message.data[5] = 0; // Reserved for future use or additional flags
 
     if (twai_transmit(&message, pdMS_TO_TICKS(100)) == ESP_OK)
     {
-        Serial.println("Live data sent over TWAI.");
+        //Serial.println("Live data sent over TWAI.");
     }
     else
     {
@@ -482,75 +519,98 @@ void receiveTWAIInput()
     twai_message_t message;
     if (twai_receive(&message, pdMS_TO_TICKS(10)) == ESP_OK)
     {
-        if (message.data_length_code == 2 && message.identifier == DEVICE_TWAI_ID)
+        // Ensure the message is intended for this device
+        if (message.identifier == DEVICE_TWAI_ID)
         {
-            // Handle target angle sent by the master
-            int targetAngle = (message.data[1] << 8) | message.data[0];
-            if (targetAngle >= 0 && targetAngle <= 360)
-            {
-                if (!isZeroed)
-                {
-                    Serial.println("System is not zeroed. Type 'ZERO' to set zero offset via TWAI.");
-                    return;
-                }
-
-                // Update the target angle
-                ::targetAngle = targetAngle; // Use the global variable or the appropriate scope
-                Serial.print("New target angle set via TWAI: ");
-                Serial.println(::targetAngle); // Use the global variable or the appropriate scope
-
-                // Send data back to the master
-                const char *direction = (pidOutput > 0) ? "Forward" : (pidOutput < 0) ? "Reverse"
-                                                                                      : "Stopped";
-                sendLiveDataTWAI(::targetAngle, currentAngle, direction, abs((int)pidOutput)); // Use the global variable or the appropriate scope
-            }
-            else
-            {
-                Serial.println("Invalid target angle received via TWAI.");
-            }
-        }
-        else
-        {
-            // Handle other types of messages as strings
-            String input;
+            // Print the entire TWAI message
+            Serial.print("Received TWAI message: ID=");
+            Serial.print(message.identifier, HEX);
+            Serial.print(" DLC=");
+            Serial.print(message.data_length_code);
+            Serial.print(" Data=");
             for (int i = 0; i < message.data_length_code; i++)
             {
-                input += (char)message.data[i];
+                Serial.print(message.data[i], HEX);
+                Serial.print(" ");
             }
+            Serial.println();
 
-            input.trim(); // Remove any trailing whitespace
+            if (message.data_length_code == 2)
+            {
+                // Handle target angle sent by the master
+                int targetAngle = (message.data[1] << 8) | message.data[0];
+                if (targetAngle >= 0 && targetAngle <= 360)
+                {
+                    if (!isZeroed)
+                    {
+                        Serial.println("System is not zeroed. Type 'ZERO' to set zero offset via TWAI.");
+                        return;
+                    }
 
-            if (input.equalsIgnoreCase("ZERO"))
-            {
-                performZeroing();
-            }
-            else if (input.startsWith("P="))
-            {
-                kp = input.substring(2).toFloat();
-                myPID.SetTunings(kp, ki, kd);
-                saveToEEPROM();
-                Serial.print("Updated Kp via TWAI and saved to EEPROM: ");
-                Serial.println(kp);
-            }
-            else if (input.startsWith("I="))
-            {
-                ki = input.substring(2).toFloat();
-                myPID.SetTunings(kp, ki, kd);
-                saveToEEPROM();
-                Serial.print("Updated Ki via TWAI and saved to EEPROM: ");
-                Serial.println(ki);
-            }
-            else if (input.startsWith("D="))
-            {
-                kd = input.substring(2).toFloat();
-                myPID.SetTunings(kp, ki, kd);
-                saveToEEPROM();
-                Serial.print("Updated Kd via TWAI and saved to EEPROM: ");
-                Serial.println(kd);
+                    // Update the target angle
+                    ::targetAngle = targetAngle; // Use the global variable or the appropriate scope
+                    //Serial.print("New target angle set via TWAI: ");
+                    //Serial.println(::targetAngle); // Use the global variable or the appropriate scope
+
+                    // Send data back to the master
+                    const char *direction = (pidOutput > 0) ? "Forward" : (pidOutput < 0) ? "Reverse"
+                                                                                          : "Stopped";
+                    sendLiveDataTWAI(currentAngle, motorCurrent, abs((int)pidOutput)); // Use the global variable or the appropriate scope
+                }
+                else
+                {
+                    Serial.println("Invalid target angle received via TWAI.");
+                }
             }
             else
             {
-                Serial.println("Invalid TWAI input. Use 'ZERO', 'RESETPWM', a number (0-360) for target angle, or 'P=value', 'I=value', 'D=value' to set PID parameters.");
+                // Handle other types of messages as strings
+                String input;
+                for (int i = 0; i < message.data_length_code; i++)
+                {
+                    input += (char)message.data[i];
+                }
+
+                input.trim(); // Remove any trailing whitespace
+
+                if (input.equalsIgnoreCase("ZERO"))
+                {
+                    performZeroing();
+                }
+                else if (input.equalsIgnoreCase("FLIP"))
+                {
+                    flipOutput = !flipOutput; // Toggle the flip flag
+                    Serial.print("PID output flipped via TWAI: ");
+                    Serial.println(flipOutput ? "ON" : "OFF");
+                }
+                else if (input.startsWith("P="))
+                {
+                    kp = input.substring(2).toFloat();
+                    myPID.SetTunings(kp, ki, kd);
+                    saveToEEPROM();
+                    Serial.print("Updated Kp via TWAI and saved to EEPROM: ");
+                    Serial.println(kp);
+                }
+                else if (input.startsWith("I="))
+                {
+                    ki = input.substring(2).toFloat();
+                    myPID.SetTunings(kp, ki, kd);
+                    saveToEEPROM();
+                    Serial.print("Updated Ki via TWAI and saved to EEPROM: ");
+                    Serial.println(ki);
+                }
+                else if (input.startsWith("D="))
+                {
+                    kd = input.substring(2).toFloat();
+                    myPID.SetTunings(kp, ki, kd);
+                    saveToEEPROM();
+                    Serial.print("Updated Kd via TWAI and saved to EEPROM: ");
+                    Serial.println(kd);
+                }
+                else
+                {
+                    Serial.println("Invalid TWAI input. Use 'ZERO', 'FLIP', a number (0-360) for target angle, or 'P=value', 'I=value', 'D=value' to set PID parameters.");
+                }
             }
         }
     }

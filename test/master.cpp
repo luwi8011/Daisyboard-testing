@@ -6,163 +6,263 @@
 #define CAN_TX_PIN 1
 #define MASTER_TWAI_ID 0x100
 
-const int SLAVE_TWAI_ID[2] = {0x123, 0x125};
-// Target angle variable
-#define MAXANGLES 2
-int targetAngle[MAXANGLES] = {0, 0};
+#define ANKLE_TWAI_ID 0x123 // Ankle board address
+#define KNEE_TWAI_ID 0x125  // Knee board address
+#define HIP_TWAI_ID 0x127   // Hip board address
+
+// Target angle variables for each joint
+#define MAX_JOINTS 3
+int targetAngle[MAX_JOINTS] = {0, 0, 0};
 unsigned long lastSendTime = 0; // Variable to track the last send time
+
+struct JointData {
+    float currentAngle;
+    int motorCurrent;
+    int pwm;
+};
+
+JointData jointData[MAX_JOINTS];
 
 void setupTWAI();
 void relaySerialToTWAI();
-void sendTargetAngleToSlave();
+void sendTargetAngleToSlaves();
 void handleSlaveData();
-void printLiveData(int target, int current, const char *direction, int pwm);
+void printLiveData();
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial.println("Master system initialized.");
-  setupTWAI();
+    Serial.begin(115200);
+    Serial.println("Master system initialized.");
+    setupTWAI();
 }
 
 void loop()
 {
-  relaySerialToTWAI();
-  handleSlaveData();
+    relaySerialToTWAI();
+    handleSlaveData();
 
-  // Send the target angle to the slave every 20 milliseconds
-  if (millis() - lastSendTime >= 20)
-  {
-    sendTargetAngleToSlave();
-    lastSendTime = millis();
-  }
+    // Send the target angles to the slaves every 20 milliseconds
+    if (millis() - lastSendTime >= 20)
+    {
+        sendTargetAngleToSlaves();
+        lastSendTime = millis();
+    }
 }
 
 void setupTWAI()
 {
-  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
+    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+    twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
-  // Install TWAI driver
-  if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK)
-  {
-    Serial.println("TWAI Driver installed.");
-  }
-  else
-  {
-    Serial.println("TWAI Driver installation failed.");
-    while (1)
-      ;
-  }
+    // Install TWAI driver
+    if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK)
+    {
+        Serial.println("TWAI Driver installed.");
+    }
+    else
+    {
+        Serial.println("TWAI Driver installation failed.");
+        while (1)
+            ;
+    }
 
-  // Start TWAI driver
-  if (twai_start() == ESP_OK)
-  {
-    Serial.println("TWAI Driver started.");
-  }
-  else
-  {
-    Serial.println("Failed to start TWAI Driver.");
-    while (1)
-      ;
-  }
+    // Start TWAI driver
+    if (twai_start() == ESP_OK)
+    {
+        Serial.println("TWAI Driver started.");
+    }
+    else
+    {
+        Serial.println("Failed to start TWAI Driver.");
+        while (1)
+            ;
+    }
 }
 
 void relaySerialToTWAI()
 {
-  if (Serial.available() > 0)
-  {
-    int angle[MAXANGLES];
-    String input = Serial.readStringUntil('\n');
-    input.trim(); // Remove any trailing whitespace
-    Serial.print(input);
-    char lastChar = input.charAt(input.length() - 1);
-    input.remove(input.length() - 1);
+    if (Serial.available() > 0)
+    {
+        String input = Serial.readStringUntil('\n');
+        input.trim(); // Remove any trailing whitespace
 
-    // Update the target angle based on serial input
-    if (lastChar == 'a')
-    {
-      angle[0] = input.toInt();
+        // Split the input into parts based on the ':' delimiter
+        int firstColon = input.indexOf(':');
+        int secondColon = input.indexOf(':', firstColon + 1);
+
+        if (firstColon == -1 || secondColon == -1)
+        {
+            Serial.println("Invalid input format. Use <COMMAND>:<JOINT_ADDRESS>:<DATA>");
+            return;
+        }
+
+        String command = input.substring(0, firstColon);
+        String jointAddressStr = input.substring(firstColon + 1, secondColon);
+        String data = input.substring(secondColon + 1);
+
+        int jointAddress = strtol(jointAddressStr.c_str(), NULL, 16);
+
+        if (jointAddress != HIP_TWAI_ID && jointAddress != KNEE_TWAI_ID && jointAddress != ANKLE_TWAI_ID)
+        {
+            Serial.println("Invalid joint address. Use 0x127, 0x125, or 0x123.");
+            return;
+        }
+
+        if (command.equalsIgnoreCase("FLIP"))
+        {
+            // Send FLIP command to the specified joint
+            twai_message_t message;
+            message.identifier = jointAddress;
+            message.extd = 0;             // Standard frame
+            message.rtr = 0;              // Data frame
+            message.data_length_code = 4; // Sending the FLIP command
+            message.data[0] = 'F';
+            message.data[1] = 'L';
+            message.data[2] = 'I';
+            message.data[3] = 'P';
+            if (twai_transmit(&message, pdMS_TO_TICKS(10)) != ESP_OK)
+            {
+                Serial.print("Failed to send FLIP command to ");
+                Serial.println(jointAddressStr);
+            }
+            else
+            {
+                Serial.print("FLIP command sent to ");
+                Serial.print(jointAddressStr);
+                Serial.println(" via TWAI.");
+            }
+        }
+        else if (command.equalsIgnoreCase("SET_ANGLE"))
+        {
+            int angle = data.toInt();
+            if (angle >= 0 && angle <= 360)
+            {
+                if (jointAddress == HIP_TWAI_ID)
+                {
+                    targetAngle[0] = angle;
+                    Serial.print("New target angle for HIP set via Serial: ");
+                    Serial.println(targetAngle[0]);
+                }
+                else if (jointAddress == KNEE_TWAI_ID)
+                {
+                    targetAngle[1] = angle;
+                    Serial.print("New target angle for KNEE set via Serial: ");
+                    Serial.println(targetAngle[1]);
+                }
+                else if (jointAddress == ANKLE_TWAI_ID)
+                {
+                    targetAngle[2] = angle;
+                    Serial.print("New target angle for ANKLE set via Serial: ");
+                    Serial.println(targetAngle[2]);
+                }
+            }
+            else
+            {
+                Serial.println("Invalid angle. Please enter a number between 0 and 360.");
+            }
+        }
+        else if (command.equalsIgnoreCase("ZERO"))
+        {
+            // Send ZERO command to the specified joint
+            twai_message_t message;
+            message.identifier = jointAddress;
+            message.extd = 0;             // Standard frame
+            message.rtr = 0;              // Data frame
+            message.data_length_code = 4; // Sending the ZERO command
+            message.data[0] = 'Z';
+            message.data[1] = 'E';
+            message.data[2] = 'R';
+            message.data[3] = 'O';
+            if (twai_transmit(&message, pdMS_TO_TICKS(10)) != ESP_OK)
+            {
+                Serial.print("Failed to send ZERO command to ");
+                Serial.println(jointAddressStr);
+            }
+            else
+            {
+                Serial.print("ZERO command sent to ");
+                Serial.print(jointAddressStr);
+                Serial.println(" via TWAI.");
+            }
+        }
+        else
+        {
+            Serial.println("Invalid command. Use FLIP, SET_ANGLE, or ZERO.");
+        }
     }
-    else if (lastChar == 'b')
-    {
-      angle[1] = input.toInt();
-    }
-    for (int i = 0; i < MAXANGLES; i++)
-    {
-      if (angle[i] >= 0 && angle[i] <= 360)
-      {
-        targetAngle[i] = angle[i];
-        Serial.print("New target angle ");
-        Serial.print(i);
-        Serial.print(" set via Serial: ");
-        Serial.println(targetAngle[i]);
-      }
-      else
-      {
-        Serial.println("Invalid input. Please enter a number between 0 and 360.");
-      }
-    }
-  }
 }
 
-void sendTargetAngleToSlave()
+void sendTargetAngleToSlaves()
 {
-  twai_message_t message;
-  message.extd = 0;             // Standard frame
-  message.rtr = 0;              // Data frame
-  message.data_length_code = 2; // Sending only the target angle (2 bytes)
+    twai_message_t message;
+    message.extd = 0;             // Standard frame
+    message.rtr = 0;              // Data frame
+    message.data_length_code = 2; // Sending only the target angle (2 bytes)
 
-  // Pack the target angle into the message payload
-  for (int i = 0; i < MAXANGLES; i++)
-  {
-    message.identifier = SLAVE_TWAI_ID[i]; // Target slave ID
-    message.data[0] = (uint8_t)(targetAngle[i] & 0xFF);
-    message.data[1] = (uint8_t)((targetAngle[i] >> 8) & 0xFF);
-    twai_transmit(&message, pdMS_TO_TICKS(10));
-  }
-
-  
+    // Pack the target angle into the message payload and send to each joint
+    int jointAddresses[MAX_JOINTS] = {HIP_TWAI_ID, KNEE_TWAI_ID, ANKLE_TWAI_ID};
+    for (int i = 0; i < MAX_JOINTS; i++)
+    {
+        message.identifier = jointAddresses[i]; // Target joint ID
+        message.data[0] = (uint8_t)(targetAngle[i] & 0xFF);
+        message.data[1] = (uint8_t)((targetAngle[i] >> 8) & 0xFF);
+        if (twai_transmit(&message, pdMS_TO_TICKS(10)) != ESP_OK)
+        {
+            Serial.print("Failed to send target angle to joint ");
+            Serial.println(jointAddresses[i], HEX);
+        }
+    }
 }
 
 void handleSlaveData()
 {
-  twai_message_t message;
-  if (twai_receive(&message, pdMS_TO_TICKS(10)) == ESP_OK)
-  {
-    // Ensure the message data is within the expected length
-    if (message.data_length_code != 8)
+    twai_message_t message;
+    if (twai_receive(&message, pdMS_TO_TICKS(10)) == ESP_OK)
     {
-      return;
+        if (message.data_length_code != 6)
+        {
+            return;
+        }
+
+        // Parse the incoming message
+        float currentAngle = (message.data[1] << 8) | message.data[0];
+        int motorCurrent = message.data[2]; // Read motor current from byte 2
+        int pwm = (message.data[4] << 8) | message.data[3];
+
+        // Store the parsed data
+        if (message.identifier == HIP_TWAI_ID)
+        {
+            jointData[0] = {currentAngle, motorCurrent, pwm};
+        }
+        else if (message.identifier == KNEE_TWAI_ID)
+        {
+            jointData[1] = {currentAngle, motorCurrent, pwm};
+        }
+        else if (message.identifier == ANKLE_TWAI_ID)
+        {
+            jointData[2] = {currentAngle, motorCurrent, pwm};
+        }
+
+        // Print the stored data
+        printLiveData();
     }
-
-    // Parse the incoming message
-    int target = (message.data[1] << 8) | message.data[0];
-    int current = (message.data[3] << 8) | message.data[2];
-    const char *direction = (message.data[4] == 1) ? "Forward" : (message.data[4] == 2) ? "Reverse"
-                                                                                        : "Unknown";
-    int pwm = (message.data[6] << 8) | message.data[5];
-
-    // Print the parsed data
-    printLiveData(target, current, direction, pwm);
-  }
 }
 
-void printLiveData(int target, int current, const char *direction, int pwm)
+void printLiveData()
 {
-  Serial.print("\r"); // Move the cursor to the beginning of the line
-  Serial.print("Slave Data - ");
-  Serial.print("Target: ");
-  Serial.print(target);
-  Serial.print(", Current: ");
-  Serial.print(current);
-  Serial.print(", Direction: ");
-  Serial.print(direction);
-  Serial.print(", PWM: ");
-  Serial.print(pwm);
-  Serial.print("   "); // Additional spaces to clear any leftover characters from previous prints
-  Serial.print(", Master Target: ");
-  Serial.print(targetAngle[0]);
-  Serial.print("   "); // Additional spaces to clear any leftover characters from previous prints
+    for (int i = 0; i < MAX_JOINTS; i++)
+    {
+        const char* jointName = (i == 0) ? "HIP" : (i == 1) ? "KNEE" : "ANKLE";
+        Serial.print("\033[2K"); // Clear the current line
+        Serial.print("\r");      // Move the cursor to the beginning of the line
+        Serial.print(jointName);
+        Serial.print(":angle=");
+        Serial.print(jointData[i].currentAngle);
+        Serial.print(",current=");
+        Serial.print(jointData[i].motorCurrent);
+        Serial.print(",pwm=");
+        Serial.print(jointData[i].pwm);
+        Serial.println();
+    }
 }
