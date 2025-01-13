@@ -5,53 +5,90 @@ import time
 import threading
 
 # Configure the serial connection
-ser = serial.Serial('COM6', 115200)  # Replace 'COM3' with your Arduino's serial port
+ser = serial.Serial('COM6', 115200)  # Replace 'COM6' with your Arduino's serial port
 time.sleep(2)  # Wait for the serial connection to initialize
-angle = 0
-angle2 = 0  # Declare the second angle variable
 
-def send_target_angle(value):
-    global angle
-    angle = int(float(value))
-    print(f"New target angle set via GUI: {angle}")
+# Global variables to store angles
+angles = [0, 0, 0]
 
-def send_target_angle2(value):
-    global angle2
-    angle2 = int(float(value))
-    print(f"New target angle2 set via GUI: {angle2}")
+# Joint addresses
+joint_addresses = [0x127, 0x125, 0x123]
 
-def custom_main_loop():
-    last_time = time.time()
+# Function to send target angle to the master
+def send_target_angle(slave_id, value):
+    angles[slave_id] = int(float(value))
+    ser.write(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:{angles[slave_id]}\n".encode())
+    print(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:{angles[slave_id]}")
+
+# Function to send ZERO command to the master
+def send_zero_command(slave_id):
+    ser.write(f"ZERO:0x{joint_addresses[slave_id]:X}:\n".encode())
+    print(f"ZERO:0x{joint_addresses[slave_id]:X}:")
+
+# Function to send Motor off command to the master
+def send_motor_off_command(slave_id):
+    ser.write(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:0\n".encode())
+    print(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:0")
+
+# Function to update motor current and angle
+def update_motor_data():
     while True:
-        # Your custom code here
-
-        current_time = time.time()
-        if (current_time - last_time) >= 0.2:  # 20 milliseconds
-            # Run your command every 20 milliseconds
-            ser.write(f"{angle}a\n".encode())
-            ser.write(f"{angle2}b\n".encode())
-            last_time = current_time
-        
-        time.sleep(0.001)  # Sleep for 1ms to prevent high CPU usage
+        if ser.in_waiting > 0:
+            line = ser.readline().decode().strip()
+            print(f"Received: {line}")  # Debugging print
+            if line.startswith("HIP") or line.startswith("KNEE") or line.startswith("ANKLE"):
+                parts = line.split(":")
+                joint_name = parts[0]
+                angle = parts[1].split("=")[1]
+                current = parts[2].split("=")[1]
+                pwm = parts[3].split("=")[1]
+                if joint_name == "HIP":
+                    angle_labels[0].config(text=f"Current Angle: {angle}")
+                    current_labels[0].config(text=f"Motor Current: {current}")
+                elif joint_name == "KNEE":
+                    angle_labels[1].config(text=f"Current Angle: {angle}")
+                    current_labels[1].config(text=f"Motor Current: {current}")
+                elif joint_name == "ANKLE":
+                    angle_labels[2].config(text=f"Current Angle: {angle}")
+                    current_labels[2].config(text=f"Motor Current: {current}")
 
 # Create the main window
 root = tk.Tk()
-root.title("Target Angle Adjuster")
+root.title("RoboDog Control Panel")
 
-# Create the first slider
-slider = ttk.Scale(root, from_=5, to=150, orient='horizontal', command=send_target_angle, length=800)
-slider.pack(pady=20)
+# Create sliders, labels, and buttons for each slave
+sliders = []
+angle_labels = []
+current_labels = []
+for i, joint_name in enumerate(["HIP", "KNEE", "ANKLE"]):
+    frame = tk.Frame(root)
+    frame.pack(pady=10)
 
-# Create the second slider
-slider2 = ttk.Scale(root, from_=5, to=150, orient='horizontal', command=send_target_angle2, length=800)
-slider2.pack(pady=20)
+    label = tk.Label(frame, text=f"{joint_name} Target Angle", font=("Helvetica", 14))
+    label.pack()
 
-# Create a label to display the current value of the sliders
-label = tk.Label(root, text="Adjust the target angles using the sliders", font=("Helvetica", 16))
-label.pack(pady=10)
+    slider = ttk.Scale(frame, from_=0, to=360, orient='horizontal', command=lambda value, i=i: send_target_angle(i, value), length=400)
+    slider.pack()
 
-# Start the custom main loop in a separate thread
-thread = threading.Thread(target=custom_main_loop, daemon=True)
+    angle_label = tk.Label(frame, text="Current Angle: 0", font=("Helvetica", 12))
+    angle_label.pack()
+    angle_labels.append(angle_label)
+
+    current_label = tk.Label(frame, text="Motor Current: 0", font=("Helvetica", 12))
+    current_label.pack()
+    current_labels.append(current_label)
+
+    button_frame = tk.Frame(frame)
+    button_frame.pack(pady=5)
+
+    zero_button = tk.Button(button_frame, text="ZERO", command=lambda i=i: send_zero_command(i))
+    zero_button.pack(side=tk.LEFT, padx=5)
+
+    motor_off_button = tk.Button(button_frame, text="Motor off", command=lambda i=i: send_motor_off_command(i))
+    motor_off_button.pack(side=tk.LEFT, padx=5)
+
+# Start the thread to update motor data
+thread = threading.Thread(target=update_motor_data, daemon=True)
 thread.start()
 
 # Run the Tkinter event loop
