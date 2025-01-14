@@ -167,16 +167,15 @@ void setupPins()
 
 float readAngle()
 {
-    // Start I2C transmission to the AS5600 encoder
+    // Step 1: Read the Raw Encoder Data
     Wire.beginTransmission(AS5600_ADDRESS);
     Wire.write(AS5600_ANGLE_REGISTER); // Start reading from the angle register
     if (Wire.endTransmission(false) != 0)
-    { // Repeated start
+    {
         Serial.println("I2C communication failed!");
         return currentAngle; // Return last valid angle
     }
 
-    // Request 2 bytes from the AS5600 encoder
     Wire.requestFrom(AS5600_ADDRESS, 2);
     if (Wire.available() < 2)
     {
@@ -184,20 +183,11 @@ float readAngle()
         return currentAngle; // Return last valid angle
     }
 
-    // Combine high and low bytes into a raw 12-bit angle value
     int rawAngle = (Wire.read() << 8) | Wire.read();
-
-    // Convert raw 12-bit angle to degrees
     float angleInDegrees = (rawAngle * 360.0) / 4096.0;
 
-    // Apply zero offset and direction
-    float adjustedAngle = (angleInDegrees - zeroOffset) * direction;
-
-    
-
-    // Handle wrap-around
-    float diff = adjustedAngle - lastAdjustedAngle;
-
+    // Step 2: Compute the difference to handle wraparound
+    float diff = angleInDegrees - lastAdjustedAngle;
     if (diff > 180.0)
     {
         diff -= 360.0;
@@ -208,16 +198,14 @@ float readAngle()
     }
 
     totalAngle += diff;
-    lastAdjustedAngle = adjustedAngle;
+    lastAdjustedAngle = angleInDegrees;
 
-    
-    // Debugging info
-    // Serial.print("Raw Angle: "); Serial.print(rawAngle);
-    // Serial.print(" | Adjusted Angle: "); Serial.print(adjustedAngle);
-    // Serial.print(" | Total Angle: "); Serial.println(totalAngle);
-    
-    totalAngle = abs(totalAngle); // Ensure total angle is always positive
-    return totalAngle;
+    float absAngle = abs(totalAngle);
+    // Step 3: Translate the accumulated angle relative to the calibrated zero
+    float relativeAngle = absAngle - zeroOffset;
+
+    // Step 5: Return the final processed angle
+    return abs(relativeAngle); // Ensure total angle is always positive
 }
 
 void controlMotor(float pidOutput)
@@ -316,51 +304,45 @@ void performZeroing()
 {
     Serial.println("Zeroing process started...");
     zeroOffset = 0;
-    float initialAngle = readAngle();
-    direction = initialAngle > 180 ? -1 : 1; // Determine direction to decrease the angle
+    totalAngle = 0; // Reset total angle
+    lastAdjustedAngle = 0; // Reset last adjusted angle
 
-    // Drive motor at 25% PWM for 2 seconds to find zero
-    int pwmValue = 200; // 25% of 255
-    if (direction == 1)
-    {
-        digitalWrite(MOTOR_INA_PIN, LOW);
-        digitalWrite(MOTOR_INB_PIN, HIGH);
-        ledcWrite(LEDC_CHANNEL_0, pwmValue);
-    }
-    else
-    {
-        digitalWrite(MOTOR_INA_PIN, HIGH);
-        digitalWrite(MOTOR_INB_PIN, LOW);
-        ledcWrite(LEDC_CHANNEL_0, pwmValue);
-    }
-    delay(2000); // Drive motor for 2 seconds
-
-    // Set zero offset
-    zeroOffset = readAngle();
-
+    // Step 1: Initialize the Zeroing Process
+    // Ensure the system is ready for zeroing
     digitalWrite(MOTOR_INA_PIN, LOW);
     digitalWrite(MOTOR_INB_PIN, LOW);
     ledcWrite(LEDC_CHANNEL_0, 0);
 
-    // Find endpoint by driving in the opposite direction
-    Serial.println("Finding endpoint...");
-    direction *= -1;
-    float maxAngle = zeroOffset;
-    unsigned long startTime = millis();
-    if (direction == 1)
-    {
-        digitalWrite(MOTOR_INA_PIN, LOW);
-        digitalWrite(MOTOR_INB_PIN, HIGH);
-        ledcWrite(LEDC_CHANNEL_0, pwmValue);
-    }
-    else
-    {
-        digitalWrite(MOTOR_INA_PIN, HIGH);
-        digitalWrite(MOTOR_INB_PIN, LOW);
-        ledcWrite(LEDC_CHANNEL_0, pwmValue);
-    }
+    // Step 2: Determine the Direction to the First Endpoint
+    // Start moving the motor in one direction (e.g., clockwise)
+    int pwmValue = 175; // 25% of 255
+    digitalWrite(MOTOR_INA_PIN, LOW);
+    digitalWrite(MOTOR_INB_PIN, HIGH);
+    ledcWrite(LEDC_CHANNEL_0, pwmValue);
 
-    while (millis() - startTime < 2000)
+    delay(2500); // Drive motor for 2 seconds
+
+    // Step 3: Record the First Endpoint
+    zeroOffset = readAngle();
+    delay(250); // Allow motor to stop
+
+    digitalWrite(MOTOR_INA_PIN, LOW);
+    digitalWrite(MOTOR_INB_PIN, LOW);
+    ledcWrite(LEDC_CHANNEL_0, 0);
+    delay(500); // Allow motor to stop
+
+    // Save zero offset to EEPROM
+    EEPROM.put(EEPROM_ZERO_ADDR, zeroOffset);
+    EEPROM.commit();
+
+    // Step 4: Reverse the Motor to Find the Second Endpoint
+    digitalWrite(MOTOR_INA_PIN, HIGH);
+    digitalWrite(MOTOR_INB_PIN, LOW);
+    ledcWrite(LEDC_CHANNEL_0, pwmValue);
+
+    float maxAngle = 0;
+    unsigned long startTime = millis();
+    while (millis() - startTime < 2500)
     {
         float currentAngle = readAngle();
         if (currentAngle > maxAngle)
@@ -369,19 +351,15 @@ void performZeroing()
         }
     }
 
-    // Record endpoint
+    // Step 5: Record the Second Endpoint
     endPoint = maxAngle;
-
     digitalWrite(MOTOR_INA_PIN, LOW);
     digitalWrite(MOTOR_INB_PIN, LOW);
     ledcWrite(LEDC_CHANNEL_0, 0);
 
-    // Save direction to EEPROM
-    EEPROM.put(EEPROM_DIRECTION_ADDR, direction);
+    // Save endpoint to EEPROM
+    EEPROM.put(EEPROM_END_ADDR, endPoint);
     EEPROM.commit();
-
-    // Save to EEPROM
-    saveToEEPROM();
 
     isZeroed = true;
     Serial.println("Zeroing complete. Zero and endpoint updated.");
@@ -395,22 +373,9 @@ void printLiveData(float currentAngle, float targetAngle, float pidOutput, float
     Serial.print("Target: ");
     Serial.print(targetAngle);
     Serial.print(" | Current Angle: ");
-    Serial.print(abs(totalAngle)); // Ensure the current angle is displayed as positive
+    Serial.print(currentAngle); // Ensure the current angle is displayed as positive
     Serial.print(" | PID Output: ");
     Serial.print(pidOutput);
-    Serial.print(" | Direction: ");
-    if (pidOutput > 0)
-    {
-        Serial.print("Forward");
-    }
-    else if (pidOutput < 0)
-    {
-        Serial.print("Reverse");
-    }
-    else
-    {
-        Serial.print("Stopped");
-    }
     Serial.print(" | PWM: ");
     Serial.print(abs((int)pidOutput)); // Absolute value of PID output for PWM
     Serial.print(" | Kp: ");
@@ -419,7 +384,6 @@ void printLiveData(float currentAngle, float targetAngle, float pidOutput, float
     Serial.print(ki);
     Serial.print(" | Kd: ");
     Serial.print(kd);
-
     Serial.print(" |");
 }
 
@@ -549,12 +513,11 @@ void receiveTWAIInput()
 
                     // Update the target angle
                     ::targetAngle = targetAngle; // Use the global variable or the appropriate scope
-                    //Serial.print("New target angle set via TWAI: ");
-                    //Serial.println(::targetAngle); // Use the global variable or the appropriate scope
+                    Serial.print("New target angle set via TWAI: ");
+                    Serial.println(::targetAngle); // Use the global variable or the appropriate scope
 
                     // Send data back to the master
-                    const char *direction = (pidOutput > 0) ? "Forward" : (pidOutput < 0) ? "Reverse"
-                                                                                          : "Stopped";
+                    const char *direction = (pidOutput > 0) ? "Forward" : (pidOutput < 0) ? "Reverse" : "Stopped";
                     sendLiveDataTWAI(currentAngle, motorCurrent, abs((int)pidOutput)); // Use the global variable or the appropriate scope
                 }
                 else

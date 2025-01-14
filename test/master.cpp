@@ -231,18 +231,28 @@ void handleSlaveData()
         int pwm = (message.data[4] << 8) | message.data[3];
 
         // Store the parsed data
+        const char* jointName;
         if (message.identifier == HIP_TWAI_ID)
         {
             jointData[0] = {currentAngle, motorCurrent, pwm};
+            jointName = "HIP";
         }
         else if (message.identifier == KNEE_TWAI_ID)
         {
             jointData[1] = {currentAngle, motorCurrent, pwm};
+            jointName = "KNEE";
         }
         else if (message.identifier == ANKLE_TWAI_ID)
         {
             jointData[2] = {currentAngle, motorCurrent, pwm};
+            jointName = "ANKLE";
         }
+        else
+        {
+            return;
+        }
+
+        
 
         // Print the stored data
         printLiveData();
@@ -254,15 +264,10 @@ void printLiveData()
     for (int i = 0; i < MAX_JOINTS; i++)
     {
         const char* jointName = (i == 0) ? "HIP" : (i == 1) ? "KNEE" : "ANKLE";
-        Serial.print("\033[2K"); // Clear the current line
-        Serial.print("\r");      // Move the cursor to the beginning of the line
         Serial.print(jointName);
         Serial.print(":angle=");
-        Serial.print(jointData[i].currentAngle);
+        Serial.print(jointData[i].currentAngle, 2); // Print with 2 decimal places
         Serial.print(",current=");
-        Serial.print(jointData[i].motorCurrent);
-        Serial.print(",pwm=");
-        Serial.print(jointData[i].pwm);
-        Serial.println();
+        Serial.println(jointData[i].motorCurrent);
     }
 }

@@ -17,9 +17,9 @@
 #define SCL_PIN 10
 
 // CANbus/TWAI address
-//#define DEVICE_TWAI_ID 0x123 // Ankle board address
+#define DEVICE_TWAI_ID 0x123 // Ankle board address
 //#define DEVICE_TWAI_ID 0x125 // Knee board address
-#define DEVICE_TWAI_ID 0x127 // Hip board address
+//#define DEVICE_TWAI_ID 0x127 // Hip board address
 
 float kp = 10.0; // Default proportional gain
 float ki = 0.5;  // Default integral gain
@@ -116,7 +116,7 @@ void setup()
 
     // Initialize PID
     myPID.SetMode(AUTOMATIC);
-    myPID.SetOutputLimits(-255, 255);
+    myPID.SetOutputLimits(-255, 68);
     myPID.SetSampleTime(10);              // Sample time in milliseconds
     myPID.SetTunings(kp, ki, kd, P_ON_E); // Proportional on Error
 

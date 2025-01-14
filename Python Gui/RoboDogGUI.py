@@ -10,7 +10,6 @@ time.sleep(2)  # Wait for the serial connection to initialize
 
 # Global variables to store angles
 angles = [0, 0, 0]
-
 # Joint addresses
 joint_addresses = [0x127, 0x125, 0x123]
 
@@ -30,27 +29,38 @@ def send_motor_off_command(slave_id):
     ser.write(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:0\n".encode())
     print(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:0")
 
-# Function to update motor current and angle
+# Function to process and update motor data
+def process_data(line):
+    parts = line.split(":")
+    if len(parts) != 2:
+        return  # Ignore malformed data
+
+    joint_name = parts[0]
+    data_parts = parts[1].split(",")
+    if len(data_parts) != 2:
+        return  # Ignore malformed data
+
+    angle = data_parts[0].split("=")[1]
+    current = data_parts[1].split("=")[1]
+
+    # Update the appropriate joint labels
+    if joint_name == "HIP":
+        angle_labels[0].config(text=f"Current Angle: {angle}")
+        current_labels[0].config(text=f"Motor Current: {current}")
+    elif joint_name == "KNEE":
+        angle_labels[1].config(text=f"Current Angle: {angle}")
+        current_labels[1].config(text=f"Motor Current: {current}")
+    elif joint_name == "ANKLE":
+        angle_labels[2].config(text=f"Current Angle: {angle}")
+        current_labels[2].config(text=f"Motor Current: {current}")
+
+# Function to read and process serial data
 def update_motor_data():
     while True:
         if ser.in_waiting > 0:
             line = ser.readline().decode().strip()
             print(f"Received: {line}")  # Debugging print
-            if line.startswith("HIP") or line.startswith("KNEE") or line.startswith("ANKLE"):
-                parts = line.split(":")
-                joint_name = parts[0]
-                angle = parts[1].split("=")[1]
-                current = parts[2].split("=")[1]
-                pwm = parts[3].split("=")[1]
-                if joint_name == "HIP":
-                    angle_labels[0].config(text=f"Current Angle: {angle}")
-                    current_labels[0].config(text=f"Motor Current: {current}")
-                elif joint_name == "KNEE":
-                    angle_labels[1].config(text=f"Current Angle: {angle}")
-                    current_labels[1].config(text=f"Motor Current: {current}")
-                elif joint_name == "ANKLE":
-                    angle_labels[2].config(text=f"Current Angle: {angle}")
-                    current_labels[2].config(text=f"Motor Current: {current}")
+            root.after(0, process_data, line)  # Ensure GUI updates occur in the main thread
 
 # Create the main window
 root = tk.Tk()
@@ -60,14 +70,14 @@ root.title("RoboDog Control Panel")
 sliders = []
 angle_labels = []
 current_labels = []
-for i, joint_name in enumerate(["HIP", "KNEE", "ANKLE"]):
+for i, (joint_name, max_value) in enumerate([("HIP", 148), ("KNEE", 80), ("ANKLE", 70)]):
     frame = tk.Frame(root)
     frame.pack(pady=10)
 
     label = tk.Label(frame, text=f"{joint_name} Target Angle", font=("Helvetica", 14))
     label.pack()
 
-    slider = ttk.Scale(frame, from_=0, to=360, orient='horizontal', command=lambda value, i=i: send_target_angle(i, value), length=400)
+    slider = ttk.Scale(frame, from_=0, to=max_value, orient='horizontal', command=lambda value, i=i: send_target_angle(i, value), length=400)
     slider.pack()
 
     angle_label = tk.Label(frame, text="Current Angle: 0", font=("Helvetica", 12))
