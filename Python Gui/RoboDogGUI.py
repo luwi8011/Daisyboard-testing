@@ -8,11 +8,14 @@ import threading
 ser = serial.Serial('COM6', 115200)  # Replace 'COM6' with your Arduino's serial port
 time.sleep(2)  # Wait for the serial connection to initialize
 
-# Global variables to store angles and initialization state
+# Global variables to store angles, initialization state, and recording data
 angles = [0, 0, 0]
 initialized = [False, False, False]  # Track if each slider has been initialized
-# Joint addresses
+recording = False
+recorded_data = []
 joint_addresses = [0x127, 0x125, 0x123]
+recording_thread = None
+recording_lock = threading.Lock()  # Lock for synchronizing access to recorded_data
 
 # Function to send target angle to the master
 def send_target_angle(slave_id, value):
@@ -29,6 +32,52 @@ def send_zero_command(slave_id):
 def send_motor_off_command(slave_id):
     ser.write(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:0\n".encode())
     print(f"SET_ANGLE:0x{joint_addresses[slave_id]:X}:0")
+
+# Function to start recording angles
+def start_recording():
+    global recording, recorded_data, recording_thread
+    recording = True
+    with recording_lock:
+        recorded_data = []  # Clear any previous recordings
+    record_button.config(bg="red")  # Indicate recording in progress
+
+    # Turn off all motors
+    for i in range(len(joint_addresses)):
+        send_motor_off_command(i)
+
+    def record_loop():
+        while recording:
+            with recording_lock:
+                recorded_data.append(list(angles))
+            time.sleep(1 / 20)  # Record at 20 Hz
+
+    recording_thread = threading.Thread(target=record_loop, daemon=True)
+    recording_thread.start()
+    print("Recording started")
+
+# Function to stop recording angles
+def stop_recording():
+    global recording
+    recording = False
+    if recording_thread is not None:
+        recording_thread.join()  # Ensure the recording thread has stopped
+    record_button.config(bg="SystemButtonFace")  # Reset button color
+    print("Recording stopped")
+
+# Function to play back recorded angles
+def playback_recording():
+    with recording_lock:
+        if not recorded_data:
+            print("No recording to playback")
+            return
+
+        print("Playback started")
+        for frame in recorded_data:
+            for i, angle in enumerate(frame):
+                ser.write(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}\n".encode())
+                print(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}")
+            time.sleep(1 / 20)  # Playback at 20 Hz
+        print("Playback finished")
 
 # Function to process and update motor data
 def process_data(line):
@@ -48,18 +97,21 @@ def process_data(line):
     if joint_name == "HIP":
         angle_labels[0].config(text=f"Current Angle: {angle}")
         current_labels[0].config(text=f"Motor Current: {current}")
+        angles[0] = angle  # Update the angles list
         if not initialized[0]:
             sliders[0].set(angle)
             initialized[0] = True
     elif joint_name == "KNEE":
         angle_labels[1].config(text=f"Current Angle: {angle}")
         current_labels[1].config(text=f"Motor Current: {current}")
+        angles[1] = angle  # Update the angles list
         if not initialized[1]:
             sliders[1].set(angle)
             initialized[1] = True
     elif joint_name == "ANKLE":
         angle_labels[2].config(text=f"Current Angle: {angle}")
         current_labels[2].config(text=f"Motor Current: {current}")
+        angles[2] = angle  # Update the angles list
         if not initialized[2]:
             sliders[2].set(angle)
             initialized[2] = True
@@ -107,6 +159,13 @@ for i, (joint_name, max_value) in enumerate([("HIP", 148), ("KNEE", 80), ("ANKLE
 
     motor_off_button = tk.Button(button_frame, text="Motor off", command=lambda i=i: send_motor_off_command(i))
     motor_off_button.pack(side=tk.LEFT, padx=5)
+
+# Add Record and Playback buttons
+record_button = tk.Button(root, text="Record", command=lambda: start_recording() if not recording else stop_recording())
+record_button.pack(pady=10)
+
+playback_button = tk.Button(root, text="Playback", command=playback_recording)
+playback_button.pack(pady=10)
 
 # Start the thread to update motor data
 thread = threading.Thread(target=update_motor_data, daemon=True)
