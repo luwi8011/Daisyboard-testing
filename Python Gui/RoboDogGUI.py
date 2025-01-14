@@ -8,8 +8,9 @@ import threading
 ser = serial.Serial('COM6', 115200)  # Replace 'COM6' with your Arduino's serial port
 time.sleep(2)  # Wait for the serial connection to initialize
 
-# Global variables to store angles
+# Global variables to store angles and initialization state
 angles = [0, 0, 0]
+initialized = [False, False, False]  # Track if each slider has been initialized
 # Joint addresses
 joint_addresses = [0x127, 0x125, 0x123]
 
@@ -40,19 +41,28 @@ def process_data(line):
     if len(data_parts) != 2:
         return  # Ignore malformed data
 
-    angle = data_parts[0].split("=")[1]
+    angle = float(data_parts[0].split("=")[1])
     current = data_parts[1].split("=")[1]
 
-    # Update the appropriate joint labels
+    # Update the appropriate joint labels and sliders
     if joint_name == "HIP":
         angle_labels[0].config(text=f"Current Angle: {angle}")
         current_labels[0].config(text=f"Motor Current: {current}")
+        if not initialized[0]:
+            sliders[0].set(angle)
+            initialized[0] = True
     elif joint_name == "KNEE":
         angle_labels[1].config(text=f"Current Angle: {angle}")
         current_labels[1].config(text=f"Motor Current: {current}")
+        if not initialized[1]:
+            sliders[1].set(angle)
+            initialized[1] = True
     elif joint_name == "ANKLE":
         angle_labels[2].config(text=f"Current Angle: {angle}")
         current_labels[2].config(text=f"Motor Current: {current}")
+        if not initialized[2]:
+            sliders[2].set(angle)
+            initialized[2] = True
 
 # Function to read and process serial data
 def update_motor_data():
@@ -79,6 +89,7 @@ for i, (joint_name, max_value) in enumerate([("HIP", 148), ("KNEE", 80), ("ANKLE
 
     slider = ttk.Scale(frame, from_=0, to=max_value, orient='horizontal', command=lambda value, i=i: send_target_angle(i, value), length=400)
     slider.pack()
+    sliders.append(slider)
 
     angle_label = tk.Label(frame, text="Current Angle: 0", font=("Helvetica", 12))
     angle_label.pack()

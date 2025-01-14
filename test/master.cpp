@@ -14,6 +14,7 @@
 #define MAX_JOINTS 3
 int targetAngle[MAX_JOINTS] = {0, 0, 0};
 unsigned long lastSendTime = 0; // Variable to track the last send time
+const unsigned long sendInterval = 50; // Increase the interval to 50 milliseconds
 
 struct JointData {
     float currentAngle;
@@ -41,8 +42,8 @@ void loop()
     relaySerialToTWAI();
     handleSlaveData();
 
-    // Send the target angles to the slaves every 20 milliseconds
-    if (millis() - lastSendTime >= 20)
+    // Send the target angles to the slaves every 50 milliseconds
+    if (millis() - lastSendTime >= sendInterval)
     {
         sendTargetAngleToSlaves();
         lastSendTime = millis();
