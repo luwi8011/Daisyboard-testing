@@ -3,6 +3,7 @@ from tkinter import ttk
 import serial
 import time
 import threading
+import json
 
 # Configure the serial connection
 ser = serial.Serial('COM6', 115200)  # Replace 'COM6' with your Arduino's serial port
@@ -64,20 +65,28 @@ def stop_recording():
     record_button.config(bg="SystemButtonFace")  # Reset button color
     print("Recording stopped")
 
-# Function to play back recorded angles
-def playback_recording():
+    # Save recorded data to a text file
     with recording_lock:
-        if not recorded_data:
-            print("No recording to playback")
-            return
+        with open("recorded_data.txt", "w") as file:
+            json.dump(recorded_data, file)
+    print("Recorded data saved to recorded_data.txt")
 
-        print("Playback started")
-        for frame in recorded_data:
-            for i, angle in enumerate(frame):
-                ser.write(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}\n".encode())
-                print(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}")
-            time.sleep(1 / 20)  # Playback at 20 Hz
-        print("Playback finished")
+# Function to play back recorded angles from a text file
+def playback_recording():
+    try:
+        with open("recorded_data.txt", "r") as file:
+            recorded_data = json.load(file)
+    except FileNotFoundError:
+        print("No recorded data file found")
+        return
+
+    print("Playback started")
+    for frame in recorded_data:
+        for i, angle in enumerate(frame):
+            ser.write(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}\n".encode())
+            print(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}")
+        time.sleep(1 / 20)  # Playback at 20 Hz
+    print("Playback finished")
 
 # Function to process and update motor data
 def process_data(line):
