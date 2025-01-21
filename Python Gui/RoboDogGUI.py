@@ -4,6 +4,8 @@ import serial
 import time
 import threading
 import json
+import numpy as np
+from scipy.signal import savgol_filter
 
 # Configure the serial connection
 ser = serial.Serial('COM6', 115200)  # Replace 'COM6' with your Arduino's serial port
@@ -17,6 +19,9 @@ recorded_data = []
 joint_addresses = [0x127, 0x125, 0x123]
 recording_thread = None
 recording_lock = threading.Lock()  # Lock for synchronizing access to recorded_data
+
+# Global variable to store playback speed
+playback_speed = 1.0
 
 # Function to send target angle to the master
 def send_target_angle(slave_id, value):
@@ -58,18 +63,31 @@ def start_recording():
 
 # Function to stop recording angles
 def stop_recording():
-    global recording
+    global recording, recorded_data  # Ensure recorded_data is referenced as a global variable
     recording = False
     if recording_thread is not None:
         recording_thread.join()  # Ensure the recording thread has stopped
     record_button.config(bg="SystemButtonFace")  # Reset button color
     print("Recording stopped")
 
+    # Apply Savitzky-Golay filter to recorded data
+    with recording_lock:
+        if recorded_data:
+            recorded_data = np.array(recorded_data)
+            filtered_data = savgol_filter(recorded_data, window_length=11, polyorder=3, axis=0)
+            recorded_data = filtered_data.tolist()
+
     # Save recorded data to a text file
     with recording_lock:
         with open("recorded_data.txt", "w") as file:
             json.dump(recorded_data, file)
     print("Recorded data saved to recorded_data.txt")
+
+# Function to update playback speed
+def update_playback_speed(value):
+    global playback_speed
+    playback_speed = float(value)
+    print(f"Playback speed set to {playback_speed}x")
 
 # Function to play back recorded angles from a text file
 def playback_recording():
@@ -85,7 +103,7 @@ def playback_recording():
         for i, angle in enumerate(frame):
             ser.write(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}\n".encode())
             print(f"SET_ANGLE:0x{joint_addresses[i]:X}:{angle}")
-        time.sleep(1 / 20)  # Playback at 20 Hz
+        time.sleep((1 / 20) / playback_speed)  # Adjust playback speed
     print("Playback finished")
 
 # Function to process and update motor data
@@ -175,6 +193,22 @@ record_button.pack(pady=10)
 
 playback_button = tk.Button(root, text="Playback", command=playback_recording)
 playback_button.pack(pady=10)
+
+# Add Playback Speed slider
+playback_speed_label = tk.Label(root, text="Playback Speed", font=("Helvetica", 14))
+playback_speed_label.pack(pady=5)
+
+playback_speed_slider = ttk.Scale(root, from_=1.0, to=10.0, orient='horizontal', command=update_playback_speed, length=400)
+playback_speed_slider.set(1.0)  # Set initial value to 1x
+playback_speed_slider.pack(pady=5)
+
+# Add tick marks to the slider
+tick_frame = tk.Frame(root)
+tick_frame.pack(pady=5)
+
+for i in range(1, 11):
+    tick_label = tk.Label(tick_frame, text=f"{i}x", font=("Helvetica", 10))
+    tick_label.pack(side=tk.LEFT, padx=15)
 
 # Start the thread to update motor data
 thread = threading.Thread(target=update_motor_data, daemon=True)

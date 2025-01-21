@@ -21,7 +21,7 @@
 // LEDC channel and timer definitions
 #define LEDC_CHANNEL_0 0
 #define LEDC_TIMER_0 0
-#define LEDC_BASE_FREQ 14000 // 12 kHz
+#define LEDC_BASE_FREQ 12000 // 12 kHz
 
 // Create an instance of the SSD1306 display
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -71,12 +71,12 @@ void loop() {
     // Drive motor forwards at 25% PWM
     digitalWrite(MOTOR_INA_PIN, HIGH);
     digitalWrite(MOTOR_INB_PIN, LOW);
-    ledcWrite(LEDC_CHANNEL_0, 155); // 25% of 255
+    ledcWrite(LEDC_CHANNEL_0, 64); // 25% of 255
     delay(1000); // Drive for 1 second
 
     // Drive motor backwards at 25% PWM
     digitalWrite(MOTOR_INA_PIN, LOW);
     digitalWrite(MOTOR_INB_PIN, HIGH);
-    ledcWrite(LEDC_CHANNEL_0, 155); // 25% of 255
+    ledcWrite(LEDC_CHANNEL_0, 64); // 25% of 255
     delay(1000); // Drive for 1 second
 }
