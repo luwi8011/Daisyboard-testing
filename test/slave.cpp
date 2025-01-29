@@ -16,6 +16,7 @@
 #define SDA_PIN 9
 #define SCL_PIN 10
 
+
 // CANbus/TWAI address
 //#define DEVICE_TWAI_ID 0x123 // Ankle board address
 //#define DEVICE_TWAI_ID 0x125 // Knee board address
@@ -215,7 +216,7 @@ void controlMotor(float pidOutput)
         pidOutput = -pidOutput; // Flip the PID output if the flag is set
     }
 
-    int pwmValue = (int)abs(pidOutput); // Get the absolute value of the PID output for PWM
+    int pwmValue = abs((int)pidOutput); // Get the absolute value of the PID output for PWM
 
     if (pidOutput == 0)
     {

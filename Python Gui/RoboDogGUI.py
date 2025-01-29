@@ -8,7 +8,7 @@ import numpy as np
 from scipy.signal import savgol_filter
 
 # Configure the serial connection
-ser = serial.Serial('COM6', 115200)  # Replace 'COM6' with your Arduino's serial port
+ser = serial.Serial('COM4', 115200)  # Replace 'COM6' with your Arduino's serial port
 time.sleep(2)  # Wait for the serial connection to initialize
 
 # Global variables to store angles, initialization state, and recording data

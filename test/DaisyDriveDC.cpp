@@ -81,11 +81,6 @@ void loop() {
   if (twai_receive(&message, pdMS_TO_TICKS(10)) == ESP_OK) {
     processCANMessage(message);
   }
-
-  // Print a confirmation message every 2 seconds
-  if (millis() % 2000 < 100) {
-    Serial.println("Serial monitor is working.");
-  }
 }
 
 // Initialize TWAI
